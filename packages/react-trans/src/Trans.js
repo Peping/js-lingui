@@ -3,7 +3,7 @@ import MessageFormat from "messageformat"
 
 import InjectI18n from './InjectI18n'
 import type { I18nProps } from './I18nProvider'
-import { formatElements } from './format'
+import { formatElements } from './elements'
 
 type TransProps = {
   id: string,
