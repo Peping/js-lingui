@@ -1,6 +1,6 @@
 import React from 'react'
 import { shallow } from 'enzyme'
-import { formatElements } from './format'
+import { formatElements } from './elements'
 
 
 describe('formatElements', function() {
