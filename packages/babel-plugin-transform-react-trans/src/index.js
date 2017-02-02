@@ -10,7 +10,14 @@ const mergeProps = (props, nextProps) => ({
   text: props.text + nextProps.text,
   params: Object.assign({}, props.params, nextProps.params),
   components: props.components.concat(nextProps.components),
-  elementIndex: nextProps.elementIndex
+  formats: Object.assign({}, props.formats, nextProps.formats)
+})
+
+const initialProps = (props = {}) => ({
+  text: "",
+  params: {},
+  components: [],
+  formats: {}
 })
 
 const elementGeneratorFactory = () => {
@@ -18,10 +25,38 @@ const elementGeneratorFactory = () => {
   return () => index++
 }
 
+/**
+ * Suggests a name for custom formats
+ * @param attrs: Array of format parameters
+ * @param names: Array of existing format names
+ */
+const formatNameGeneratorFactory = () => {
+  const names = []
+
+  const save = (name) => { names.push(name); return name }
+
+  return (attrs) =>  {
+    const style = attrs
+      .filter(attr => attr.key.name === 'style')
+      .map(attr => attr.value.value)[0]
+
+    const name = style ? `style_${style}` : `format`
+    if (!names.includes(name)) return save(name)
+
+    for (let i = 1; i < 9999; i++) {
+      const iName = [name, i].join('_')
+      if (!names.includes(iName)) return save(iName)
+    }
+
+    // can't find a name!
+  }
+}
+
+
 
 // Plugin function
 export default function({ types: t }) {
-  let elementGenerator
+  let elementGenerator, formatNameGenerator
 
   function isIdAttribute(node) {
     return t.isJSXAttribute(node) && t.isJSXIdentifier(node.name, {name: 'id'})
@@ -35,6 +70,10 @@ export default function({ types: t }) {
     elementName('Plural')(node) ||
     elementName('Select')(node) ||
     elementName('SelectOrdinal')(node)
+  )
+  const isFormatElement = (node) => (
+    elementName('DateFormat')(node) ||
+    elementName('NumberFormat')(node)
   )
 
   function processElement(node, props, root = false) {
@@ -57,7 +96,7 @@ export default function({ types: t }) {
       let variable, offset = ''
 
       for (const attr of element.attributes) {
-        const { name: { name } } = attr
+        const {name: {name}} = attr
 
         if (name === 'value') {
           const exp = attr.value.expression
@@ -68,7 +107,7 @@ export default function({ types: t }) {
           offset = ` offset:${attr.value.value}`
 
         } else {
-          props = processChildren(attr.value, Object.assign({}, props, { text: '' }))
+          props = processChildren(attr.value, Object.assign({}, props, {text: ''}))
           choices[name.replace('_', '=')] = props.text
         }
       }
@@ -79,6 +118,38 @@ export default function({ types: t }) {
 
       props.text = `{${variable}, ${choicesType},${offset}${categories}}`
       element.attributes = element.attributes.filter(attr => attr.name.name === 'props')
+      element.name = t.JSXIdentifier('Trans')
+
+    } else if (isFormatElement(node)) {
+      const params = element.attributes.reduce((acc, item) => {
+        acc[item.name.name] = item.value
+        return acc
+      }, {})
+
+      const variable = params.value.expression.name
+      const formatType = element.name.name.replace(/Format$/, '').toLowerCase()
+
+      const args = [variable, formatType]
+      if (t.isStringLiteral(params.format)) {
+        args.push(params.format.value)
+
+      } else if (t.isJSXExpressionContainer(params.format)) {
+        const exp = params.format.expression
+
+        // Find a unique name for custom format...
+        const formatName = formatNameGenerator(exp.properties)
+
+        // ...and push it to global formats prop
+        props.formats[formatName] = t.objectProperty(
+          t.identifier(formatName), exp
+        )
+
+        args.push(formatName)
+      }
+
+      // args = [variable, type, format] => e.g: {interest, number, percent}
+      props.text += `{${args.join(', ')}}`
+      element.attributes = []
       element.name = t.JSXIdentifier('Trans')
 
     // Other elements
@@ -104,11 +175,7 @@ export default function({ types: t }) {
   }
 
   function processChildren(node, props) {
-    let nextProps = {
-      text: "",
-      params: {},
-      components: []
-    }
+    let nextProps = initialProps()
 
     if (t.isJSXExpressionContainer(node)) {
       const exp = node.expression
@@ -162,14 +229,11 @@ export default function({ types: t }) {
     visitor: {
       JSXElement({ node }) {
         elementGenerator = elementGeneratorFactory()
+        formatNameGenerator = formatNameGeneratorFactory()
 
         // 1. Collect all parameters and inline elements and generate message ID
 
-        const props = processElement(node, {
-          text: "",
-          params: {},
-          components: []
-        }, /* root= */true)
+        const props = processElement(node, initialProps(), /* root= */true)
 
         if (!props) return
 
@@ -199,6 +263,15 @@ export default function({ types: t }) {
             t.JSXAttribute(
               t.JSXIdentifier("params"),
               t.JSXExpressionContainer(t.objectExpression(paramsList)))
+          )
+        }
+        // Parameters for variable substitution
+        const formatsList = Object.values(props.formats)
+        if (formatsList.length) {
+          attrs.push(
+            t.JSXAttribute(
+              t.JSXIdentifier("formats"),
+              t.JSXExpressionContainer(t.objectExpression(formatsList)))
           )
         }
 
